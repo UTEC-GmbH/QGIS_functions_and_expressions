@@ -1,74 +1,133 @@
-from typing import Any
-
 from qgis.core import qgsfunction
 
 
-@qgsfunction(args="auto", group="Benutzerausdrücke")
+@qgsfunction(args="auto", group="Benutzerausdrücke", usesGeometry=False)
 def beschriftung_flurstuecke(
-    spalte_landkreis: str | None = "kreis",
-    spalte_gemarkung: str | None = "gemarkung",
-    spalte_flur: str | None = "flur",
-    spalte_zaehler: str | None = "flstnrzae",
-    spalte_nenner: str | None = "flstnrnen",
+    nur_flurst: bool = False,
+    spalten: dict[str, str] | None = None,
     feature=None,
     parent=None,
-):
-    """
-    Erstellt eine Beschriftung für Flurstücke basierend auf verfügbaren Attributen.
+) -> str:
+    """Erstellt eine Beschriftung für Flurstücke basierend auf verfügbaren Attributen.
     Setzt die Teile mit Zeilenumbruch und korrekten Trennern zusammen.<br><br>
 
-    <H1>Hinweis:</H1><br>
-    Die Spaltennamen müssen als Text 
-    (mit einfachen Anführungszeichen 'Spaltenname')
-    in folgender Reihenfolge angegeben werden:<br><br>
+    <H1>Parameter:</H1><br>
+    <ul>
+        <li><b>nur_flurst</b> (bool): Wenn True, wird nur die Flurstücksnummer
+            (Zähler[/Nenner]) zurückgegeben. Standard: False.</li>
+        <li><b>spalten</b> (dict): Ein Dictionary, das die Standard-Schlüssel
+            ('landkreis', 'gemarkung', 'flur', 'zaehler', 'nenner') auf die
+            tatsächlichen Spaltennamen in der Attributtabelle abbildet.
+            Wenn eine Spalte nicht verwendet werden soll, kann ihr Wert im
+            Dictionary auf eine leere Zeichenkette ('') gesetzt oder der
+            entsprechende Schlüssel weggelassen werden.<br>
+            Standardmäßig werden folgende Spaltennamen verwendet:
+            <pre><code>{
+    "landkreis": "kreis",
+    "gemarkung": "gemarkung",
+    "flur": "flur",
+    "zaehler": "flstnrzae",
+    "nenner": "flstnrnen"
+    }</code></pre>
+        </li>
+    </ul>
 
-    1. Spaltenname für <b>Landkreis</b> (Standard: 'kreis')<br>
-    2. Spaltenname für <b>Gemarkung</b> (Standard: 'gemarkung')<br>
-    3. Spaltenname für <b>Flur</b> (Standard: 'flur')<br>
-    4. Spaltenname für <b>Flurstück - Zähler</b> (Standard: 'flstnrzae')<br>
-    5. Spaltenname für <b>Flurstück - Nenner</b> (Standard: 'flstnrnen')<br><br>
+    <H1>Beispiele im QGIS Ausdruckseditor:</H1><br>
 
-    Spalten, die nicht angezeigt werden sollen, 
-    müssen als leere Zeichenkette ('') übergeben werden.<br><br>
+    Volle Beschriftung mit Standard-Spaltennamen:<br>
+    <code>beschriftung_flurstuecke()</code><br>
+    <i>oder</i><br>
+    <code>beschriftung_flurstuecke(nur_flurst:=False)</code><br><br>
 
+    Nur Flurstücksnummer mit Standard-Spaltennamen:<br>
+    <code>beschriftung_flurstuecke(nur_flurst:=True)</code><br><br>
 
-    <H1>Beispiele:</H1><br>
+    Volle Beschriftung, aber ohne Landkreis und Gemarkung (Standard-Spaltennamen):<br>
+    <code>beschriftung_flurstuecke(spalten:=map('landkreis', '', 'gemarkung', ''))</code>
+    <br><i>(Beachten Sie: Die restlichen Standardspalten werden weiterhin verwendet)</i><br><br>
 
-    ...volle Beschriftung mit Standardwerten:<br>
-    <i>beschriftung_flurstuecke()</i><br><br>
-    
-    ...Beschriftung mit Standardwerten ohne Landkreis und Gemarkung:<br>
-    <i>beschriftung_flurstuecke('', '')</i><br><br>
-    
-    ...Beschriftung mit Standardwerten ohne Gemarkung:<br>
-    <i>beschriftung_flurstuecke('kreis', '')</i><br><br>
-   
-    ...anderen Spaltennamen und ohne Landkreis und Gemarkung:<br>
-    <i>beschriftung_flurstuecke('', '', 'Flur', 'Flurstück-Z', 'Flurstück-N')</i><br><br>
+    Volle Beschriftung mit abweichenden Spaltennamen für Flur, Zähler, Nenner
+    und ohne Gemarkung:<br>
+    <code>beschriftung_flurstuecke(
+        spalten:=map(
+            'gemarkung', '',
+            'flur', 'FlurNr',
+            'zaehler', 'Flurst_Z',
+            'nenner', 'Flurst_N'
+        )
+    )</code><br>
+    <i>(Beachten Sie: 'landkreis' verwendet weiterhin den Standard 'kreis')</i><br><br>
 
-    
+    Nur Flurstücksnummer mit abweichenden Spaltennamen:<br>
+    <code>beschriftung_flurstuecke(
+        nur_flurst:=True,
+        spalten:=map('zaehler', 'NrZaehler', 'nenner', 'NrNenner')
+    )</code><br><br>
+
     """
+    if feature is None:
+        return "Fehler: Kein Feature übergeben."
 
-    def col_value(col_name: str | None) -> str | None:
+    default_columns: dict[str, str] = {
+        "landkreis": "kreis",
+        "gemarkung": "gemarkung",
+        "flur": "flur",
+        "zaehler": "flstnrzae",
+        "nenner": "flstnrnen",
+    }
+
+    # Starte mit den Standardwerten
+    cols: dict[str, str] = default_columns.copy()
+    # Überschreibe/Ergänze mit den übergebenen Spalten, falls vorhanden
+    if spalten:
+        cols.update(spalten)
+
+    def col_value(key: str) -> str | None:
+        """Holt den Wert sicher aus dem Feature anhand des Dictionary-Schlüssels."""
+        col_name = cols.get(key)
         if col_name and col_name in feature.fields().names():
             val = feature[col_name]
-            return str(val).strip() if val not in [None, "NULL"] else None
+            # Prüfe auf None und leere Strings nach dem Strippen
+            if val is not None:
+                str_val = str(val).strip()
+                if str_val and str_val.upper() != "NULL":
+                    return str_val
         return None
 
-    lk: str = (
-        f"{col_value(spalte_landkreis)} \n" if col_value(spalte_landkreis) else ''
-    )
-    gem: str | None = (
-        f"{col_value(spalte_gemarkung)} \n" if col_value(spalte_gemarkung) else ''
-    )
-    flur: str | None = (
-        f"Flur {col_value(spalte_flur)} " if col_value(spalte_flur) else ''
-    )
-    zael: str | None = (
-        f"Flurstück {col_value(spalte_zaehler)}" if col_value(spalte_zaehler) else ''
-    )
-    nenner: str | None = (
-        f"/{col_value(spalte_nenner)}" if col_value(spalte_nenner) else ''
-    )
+    zael_val: str | None = col_value("zaehler")
+    nenner_val: str | None = col_value("nenner")
 
-    return f"{lk}{gem}{flur}{zael}{nenner}"
+    # Flurstücksteil zusammenbauen
+    flurst_teil: str = ""
+    if zael_val:
+        flurst_teil = zael_val
+        if nenner_val:
+            flurst_teil += f"/{nenner_val}"
+
+    if nur_flurst:
+        return flurst_teil  # Nur Zähler[/Nenner] zurückgeben
+
+    # Komplette Beschriftung zusammenbauen
+    lk_val: str | None = col_value("landkreis")
+    gem_val: str | None = col_value("gemarkung")
+    flur_val: str | None = col_value("flur")
+
+    teile: list[str] = []
+    if lk_val:
+        teile.append(lk_val)
+    if gem_val:
+        teile.append(gem_val)
+
+    flur_prefix: str = "Flur " if flur_val else ""
+    flurst_prefix: str = "Flurstück " if flurst_teil and not nur_flurst else ""
+
+    # Kombiniere Flur und Flurstück für die letzte Zeile
+    letzte_zeile: str = (
+        f"{flur_prefix}{flur_val or ''} {flurst_prefix}{flurst_teil}".strip()
+    )
+    if letzte_zeile:
+        teile.append(letzte_zeile)
+
+    return " \n".join(
+        teile
+    )  # Fügt Zeilenumbruch nur hinzu, wenn mehrere Teile existieren
